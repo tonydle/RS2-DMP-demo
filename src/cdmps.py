@@ -101,7 +101,7 @@ class CartesianDMPs(object):
               '\n dem_pos size:     \t %s' % self.dem_pos.shape[0] ,
               '\n dem_quat size:    \t %s' % self.dem_quat.shape[0] ,
               '\n rep_pos size:     \t %s' % self.rep_pos.shape[0] ,
-              '\n rep_pos size:     \t %s' % self.rep_quat.shape[0] ,
+              '\n rep_quat size:    \t %s' % self.rep_quat.shape[0] ,
               '\n',
               '\n Pstart_offset:    \t %s' % Pstart_offset , 
               '\n Pgoal_offset:     \t %s' % Pgoal_offset ,
@@ -380,7 +380,7 @@ class CartesianDMPs(object):
 
         self.s_stepnum += 1
 
-        return next_pos, next_quat
+        return next_pos, next_linVel, next_quat
 
 
     def logmultconjQuats(self, quat1, quat2):
@@ -416,7 +416,7 @@ class CartesianDMPs(object):
         return euler_angles
     
 
-    def analysis_plots(self, feature = None):
+    def analysis_plots(self, feature = None, obstacle_pos = None, **kwargs):
 
         if feature == 'phases':
             plt.figure
