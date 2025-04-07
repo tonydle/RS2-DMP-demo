@@ -139,12 +139,3 @@ if __name__ == '__main__':
         ax.set_title('External Forces on CDMPs from Potential Field')
         ax.legend()
         plt.show()
-
-
-
-
-     
-
-
-
-

@@ -1,0 +1,3 @@
+pandas
+pyquaternion
+numpy<2
