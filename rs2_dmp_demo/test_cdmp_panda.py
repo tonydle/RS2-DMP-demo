@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 """
-ROS 2 node that uses CDMPs to generate a new Cartesian trajectory based on a demo trajectory,
-starting from the current robot pose obtained from tf.
-The node computes a linear demo trajectory relative to the current pose (using a user-defined
-direction and distance), learns a CDMP from it, and then rolls out a reproduction trajectory with
-optional collision avoidance.
-Velocity commands are published on /servo_node/delta_twist_cmds.
-
-User-configurable parameters at the top:
-  - use_collision: Whether a collision object is in place (activates obstacle avoidance)
-  - movement_direction: The axis/direction of movement (e.g. [1, 0, 0] for x-axis)
-  - movement_distance: The distance (in meters) of the linear movement
-  - ee_link: The end-effector link name (used to look up its pose from tf)
-  - base_link: The base link name (used as the reference frame for tf and as the twist header)
+ROS 2 demo node that:
+  1. Uses tf2 to get the current end-effector pose (from "ee_link" relative to "base_link").
+  2. Generates a linear demo trajectory (by adding a relative displacement along a user-defined direction).
+  3. Learns a CDMP from the demo trajectory.
+  4. Rolls out the reproduction trajectory (optionally with collision avoidance).
+  5. Publishes RViz markers for:
+       - The original (demo) trajectory.
+       - The reproduced trajectory.
+       - The collision object.
+  6. Finally, after visualization, publishes TwistStamped velocity commands to have the robot follow the trajectory.
+  
+User-configurable parameters:
+  - use_collision: Activate collision-avoidance (and so display the collision object).
+  - movement_direction: A 3D vector in the base frame.
+  - movement_distance: Linear displacement (m) to add to the current position.
+  - movement_time: The total demo duration in seconds.
+  - ee_link: The end-effector link name (TF lookup).
+  - base_link: The base link name (TF lookup and marker header).
+  
+This script is meant to run once as a demo.
 """
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import TwistStamped, Point
 from visualization_msgs.msg import Marker
 import numpy as np
 import math
@@ -26,159 +33,124 @@ import time
 import tf2_ros
 from tf2_ros import TransformException
 
-# --- Import the CDMPs class (make sure its module is in your PYTHONPATH) ---
+# --- Import the CDMPs class ---
 from cdmp.src.cdmps import CartesianDMPs
 
-
-class CDMPServoNode(Node):
+class CDMPDemoNode(Node):
     def __init__(self):
-        super().__init__('cdmp_servo_node')
+        super().__init__('cdmp_demo_node')
 
         # =================== User Parameters =================== #
-        # Collision avoidance activation
-        self.use_collision = True  
+        self.use_collision = True  # if True, collision avoidance is enabled
 
-        # Movement parameters (relative movement direction and distance)
-        self.movement_direction = np.array([1.0, 0.0, 0.0])  # e.g., along -y-axis
-        self.movement_distance = 1.0  # in meters
-        self.movement_time = 10.0  # in seconds (for demo trajectory generation)
-        self.num_demo_points = 100  # number of demo points for interpolation
+        # Relative movement parameters (in base_link coordinates)
+        self.movement_direction = np.array([1.0, 0.0, 0.0])  # e.g., along +x-axis
+        self.movement_distance = 0.4  # in meters
+        self.movement_time = 1.0     # demo trajectory duration (s)
+        self.num_demo_points = 300    # number of interpolation points
 
-        # TF parameters: set the end-effector link and base link names
-        self.ee_link = "panda_link8"      # adjust as needed
-        self.base_link = "panda_link0"    # adjust as needed
-        # ========================================================= #
+        # TF parameters: end-effector and base link names
+        self.ee_link = "panda_link8"    # adjust as needed
+        self.base_link = "panda_link0"  # adjust as needed
 
         # --- CDMP Parameters ---
         self.alpha_s_val = 7.0
-        self.k_gain_val = 1000.0
+        self.k_gain_val = 100.0
         self.rbfs_pSec_val = 4.0
         self.tau_scaler_val = 1.0
 
-        # Obstacle avoidance parameters
-        self.beta_val = 3.0
-        self.lambda_f_val = 3.0
-        self.eta_val = 3.0
-        self.obstacle_pos = np.array([0.45, 0.1, 0.6])
+        # Obstacle avoidance parameters and object position (in base_link frame)
+        self.beta_val = 1.5
+        self.lambda_f_val = 1.5
+        self.eta_val = 1.5
+        self.obstacle_pos = np.array([0.45, 0.05, 0.6])
 
-        # Publisher for TwistStamped messages
-        self.vel_pub = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
-
-        # Publisher for the collision object marker
+        # Publishers for visualization markers and velocity commands
         self.marker_pub = self.create_publisher(Marker, 'visualization_marker', 10)
-        # Create a timer to publish the marker periodically
-        self.marker_timer = self.create_timer(1.0, self.publish_marker_callback)
+        self.vel_pub = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
 
         # Initialize tf2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.get_logger().info("CDMP Servo Node started. Waiting for TF transform...")
-
-        # CDMP instance (to be initialized after obtaining current pose)
+        # CDMP instance (to be created later)
         self.cdmp = None
-        self.dt = None
-        self.step_index = 0
-        self.servo_timer = None
 
-        # Start a timer to try to get the current pose from TF
-        self.tf_timer = self.create_timer(0.1, self.tf_timer_callback)
+    def get_current_tf(self, timeout=5.0):
+        """Block until a transform is available or timeout is reached."""
+        self.get_logger().info("Waiting for TF transform from {} to {}..."
+                               .format(self.base_link, self.ee_link))
+        start_time = time.time()
+        while (time.time() - start_time) < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            try:
+                now = rclpy.time.Time()
+                transform = self.tf_buffer.lookup_transform(
+                    self.base_link,
+                    self.ee_link,
+                    now,
+                    rclpy.duration.Duration(seconds=0.5))
+                return transform
+            except TransformException as ex:
+                self.get_logger().warn("TF lookup failed: " + str(ex))
+                time.sleep(0.1)
+        self.get_logger().error("Timeout waiting for TF transform.")
+        raise RuntimeError("TF transform not available.")
 
-    def publish_marker_callback(self):
-        """
-        Publishes a visualization marker representing the collision object.
-        """
-        marker = Marker()
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.header.frame_id = self.base_link
-        marker.ns = "collision_object"
-        marker.id = 0
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.pose.position.x = self.obstacle_pos[0]
-        marker.pose.position.y = self.obstacle_pos[1]
-        marker.pose.position.z = self.obstacle_pos[2]
-        marker.pose.orientation.w = 1.0  # no rotation
-        # Set the sphere size (adjust as needed)
-        marker.scale.x = 0.1
-        marker.scale.y = 0.1
-        marker.scale.z = 0.1
-        # Set color (red, semi-transparent)
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.color.a = 0.8
-        marker.lifetime.sec = 0  # 0 means marker never auto-deletes
+    def run_cdmp_demo(self):
+        # 1. Get the current end-effector pose from TF.
+        transform = self.get_current_tf()
+        self.start_pos = np.array([transform.transform.translation.x,
+                                   transform.transform.translation.y,
+                                   transform.transform.translation.z])
+        self.start_quat = np.array([transform.transform.rotation.w,
+                                    transform.transform.rotation.x,
+                                    transform.transform.rotation.y,
+                                    transform.transform.rotation.z])
+        self.get_logger().info(f"Start pose: {self.start_pos}")
 
-        self.marker_pub.publish(marker)
+        # 2. Define the goal pose by adding the relative displacement.
+        norm_dir = self.movement_direction / np.linalg.norm(self.movement_direction)
+        self.goal_pos = self.start_pos + norm_dir * self.movement_distance
+        self.goal_quat = self.start_quat.copy()
+        self.get_logger().info(f"Goal pose: {self.goal_pos}")
 
-    def tf_timer_callback(self):
-        try:
-            now = rclpy.time.Time()
-            # Lookup the transform from base_link to ee_link (i.e. current EE pose in base frame)
-            trans = self.tf_buffer.lookup_transform(self.base_link, self.ee_link, now)
-            # Extract position and orientation from the transform message
-            self.start_pos = np.array([trans.transform.translation.x,
-                                       trans.transform.translation.y,
-                                       trans.transform.translation.z])
-            self.start_quat = np.array([trans.transform.rotation.w,
-                                        trans.transform.rotation.x,
-                                        trans.transform.rotation.y,
-                                        trans.transform.rotation.z])
-            self.get_logger().info(f"Got current pose from TF: {self.start_pos}")
+        # 3. Generate the demo trajectory (linear interpolation from start to goal)
+        self.dem_time = np.linspace(0, self.movement_time, self.num_demo_points)
+        dt = self.dem_time[1] - self.dem_time[0]
+        dem_pos = np.linspace(self.start_pos, self.goal_pos, self.num_demo_points)
+        dem_quat = np.tile(self.start_quat, (self.num_demo_points, 1))
 
-            # Compute the goal position by adding a relative displacement
-            norm_dir = self.movement_direction / np.linalg.norm(self.movement_direction)
-            self.goal_pos = self.start_pos + norm_dir * self.movement_distance
-            self.goal_quat = self.start_quat.copy()
+        # Publish marker for the demo trajectory
+        self.publish_trajectory_marker(dem_pos, marker_id=1, ns="demo_path",
+                                         color=(0.0, 0.0, 1.0, 1.0),  # blue
+                                         marker_text="Demo Trajectory")
 
-            # Print the start and goal positions
-            self.get_logger().info(f"Start position: {self.start_pos}")
-            self.get_logger().info(f"Goal position: {self.goal_pos}")
+        # 4. Initialize and learn CDMP from the demo trajectory.
+        cdmp = CartesianDMPs()
+        cdmp.load_demo(filename="demo",
+                       dem_time=self.dem_time,
+                       dem_pos=dem_pos,
+                       dem_quat=dem_quat)
+        cdmp.learn_cdmp(alpha_s=self.alpha_s_val,
+                        k_gain=self.k_gain_val,
+                        rbfs_pSec=self.rbfs_pSec_val)
+        rep_relpose_start = np.hstack((np.zeros(3), self.start_quat))
+        rep_relpose_goal = np.hstack((np.zeros(3), self.goal_quat))
+        cdmp.init_reproduction(tau_scaler=self.tau_scaler_val,
+                               rep_relpose_start=rep_relpose_start,
+                               rep_relpose_goal=rep_relpose_goal)
 
-            # --- Generate a Demo Trajectory (Linear Interpolation) ---
-            self.dem_time = np.linspace(0, self.movement_time, self.num_demo_points)
-            self.dt = self.dem_time[1] - self.dem_time[0]
-            # Interpolate positions between start and goal
-            self.dem_pos = np.linspace(self.start_pos, self.goal_pos, self.num_demo_points)
-            # Use constant orientation (or interpolate if needed)
-            self.dem_quat = np.tile(self.start_quat, (self.num_demo_points, 1))
-
-            # --- Initialize and Learn CDMP from the Demo Trajectory ---
-            self.cdmp = CartesianDMPs()
-            self.cdmp.load_demo(filename="demo",
-                                dem_time=self.dem_time,
-                                dem_pos=self.dem_pos,
-                                dem_quat=self.dem_quat)
-            self.cdmp.learn_cdmp(alpha_s=self.alpha_s_val,
-                                 k_gain=self.k_gain_val,
-                                 rbfs_pSec=self.rbfs_pSec_val)
-            # For reproduction, we use no offset (relative pose = zeros)
-            rep_relpose_start = np.hstack((np.zeros(3), self.start_quat))
-            rep_relpose_goal = np.hstack((np.zeros(3), self.goal_quat))
-            self.cdmp.init_reproduction(tau_scaler=self.tau_scaler_val,
-                                        rep_relpose_start=rep_relpose_start,
-                                        rep_relpose_goal=rep_relpose_goal)
-
-            # Start the servoing timer callback using the demo dt
-            self.servo_timer = self.create_timer(self.dt, self.servo_callback)
-            self.get_logger().info("CDMP initialized. Starting servoing...")
-            # Cancel the TF timer since initialization is complete
-            self.tf_timer.cancel()
-        except TransformException as ex:
-            self.get_logger().warn("TF lookup failed: " + str(ex))
-        except Exception as e:
-            self.get_logger().error("Error in TF lookup: " + str(e))
-
-    def servo_callback(self):
-        if self.step_index < len(self.cdmp.rep_cs.s_track):
-            s_step = self.cdmp.rep_cs.s_track[self.step_index]
-
-            # --- Obstacle Avoidance (if enabled) ---
-            curr_pos = self.cdmp.rep_pos[-1]
-            curr_linVel = self.cdmp.rep_linVel[-1]
+        # 5. Roll out the reproduction trajectory.
+        rep_positions = []
+        num_steps = len(cdmp.rep_cs.s_track)
+        for i in range(num_steps):
+            s_step = cdmp.rep_cs.s_track[i]
+            # Compute repulsive force if collision avoidance is enabled
             rep_force = np.zeros(3)
             if self.use_collision:
+                curr_pos = cdmp.rep_pos[-1]
+                curr_linVel = cdmp.rep_linVel[-1]
                 d = np.linalg.norm(curr_pos - self.obstacle_pos)
                 if d > 0:
                     nabla_d = (curr_pos - self.obstacle_pos) / d
@@ -191,39 +163,112 @@ class CDMPServoNode(Node):
                     if theta > (math.pi / 2) and theta <= math.pi:
                         rep_force = ((-cos_theta) ** self.beta_val * self.lambda_f_val *
                                      self.eta_val * curr_linVel_norm * nabla_d) / (d ** (self.eta_val + 1))
+            next_pos, next_linVel, next_quat = cdmp.rollout_step(curr_s_step=s_step,
+                                                                  ext_force=rep_force)
+            rep_positions.append(next_pos.flatten())
+        rep_positions = np.array(rep_positions)
 
-            # --- CDMP Rollout Step ---
-            next_pos, next_linVel, next_quat = self.cdmp.rollout_step(curr_s_step=s_step,
-                                                                      ext_force=rep_force)
-            lin_vel = next_linVel[0]
+        # Publish marker for the reproduction trajectory
+        self.publish_trajectory_marker(rep_positions, marker_id=2, ns="reproduced_path",
+                                         color=(0.0, 1.0, 0.0, 1.0),  # green
+                                         marker_text="Reproduced Trajectory")
+        
+        # Publish the collision object marker.
+        self.publish_collision_marker()
 
-            # Create and populate a TwistStamped message for the velocity command
+        self.get_logger().info("Markers published.")
+        input("Press Enter to start following the trajectory...")
+
+        # 6. Make the robot follow the reproduced trajectory.
+        # Compute approximate velocity commands as finite differences between positions.
+        self.get_logger().info("Following the reproduced trajectory...")
+        for i in range(len(rep_positions) - 1):
+            # Compute velocity vector (position difference divided by dt)
+            velocity = (rep_positions[i+1] - rep_positions[i]) / dt
             twist = TwistStamped()
             twist.header.stamp = self.get_clock().now().to_msg()
             twist.header.frame_id = self.base_link
-            twist.twist.linear.x = lin_vel[0]
-            twist.twist.linear.y = lin_vel[1]
-            twist.twist.linear.z = lin_vel[2]
+            twist.twist.linear.x = velocity[0]
+            twist.twist.linear.y = velocity[1]
+            twist.twist.linear.z = velocity[2]
             twist.twist.angular.x = 0.0
             twist.twist.angular.y = 0.0
             twist.twist.angular.z = 0.0
-
             self.vel_pub.publish(twist)
-            self.step_index += 1
-        else:
-            self.get_logger().info("CDMP trajectory complete. Stopping servoing.")
-            self.servo_timer.cancel()
+            time.sleep(dt)
+        # At the end, publish a zero command to stop the robot.
+        stop_twist = TwistStamped()
+        stop_twist.header.stamp = self.get_clock().now().to_msg()
+        stop_twist.header.frame_id = self.base_link
+        self.vel_pub.publish(stop_twist)
+        self.get_logger().info("Trajectory following complete.")
+
+    def publish_trajectory_marker(self, positions, marker_id, ns, color, marker_text):
+        """
+        Publishes a LINE_STRIP marker that visualizes the given set of positions.
+        :param positions: Numpy array of shape (N, 3)
+        :param marker_id: A unique ID for the marker.
+        :param ns: The marker namespace.
+        :param color: Tuple (r, g, b, a) for marker color.
+        :param marker_text: Marker text (if used by TEXT_VIEW_FACING markers)
+        """
+        marker = Marker()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.header.frame_id = self.base_link
+        marker.ns = ns
+        marker.id = marker_id
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+
+        for pos in positions:
+            pt = Point()
+            pt.x, pt.y, pt.z = pos
+            marker.points.append(pt)
+        marker.scale.x = 0.01  # line width
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
+        marker.lifetime.sec = 0
+        marker.text = marker_text
+
+        self.marker_pub.publish(marker)
+        self.get_logger().info(f"Published {ns} marker with {len(positions)} points.")
+
+    def publish_collision_marker(self):
+        """Publishes a spherical marker representing the collision object."""
+        marker = Marker()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.header.frame_id = self.base_link
+        marker.ns = "collision_object"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = self.obstacle_pos[0]
+        marker.pose.position.y = self.obstacle_pos[1]
+        marker.pose.position.z = self.obstacle_pos[2]
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.05
+        marker.scale.y = 0.05
+        marker.scale.z = 0.05
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 0.8
+        marker.lifetime.sec = 0
+
+        self.marker_pub.publish(marker)
+        self.get_logger().info("Published collision object marker.")
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = CDMPServoNode()
+    node = CDMPDemoNode()
     try:
-        rclpy.spin(node)
+        # Run the demo: generate paths, publish markers, and follow trajectory.
+        node.run_cdmp_demo()
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down CDMP servo node.")
-    node.destroy_node()
-    rclpy.shutdown()
+        node.get_logger().info("Shutting down CDMP demo node.")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

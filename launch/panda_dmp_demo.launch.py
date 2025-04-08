@@ -61,7 +61,7 @@ def generate_launch_description():
 
     # ros2_control using FakeSystem as hardware
     ros2_controllers_path = os.path.join(
-        get_package_share_directory("moveit_resources_panda_moveit_config"),
+        get_package_share_directory("rs2_dmp_demo"),
         "config",
         "ros2_controllers.yaml",
     )
@@ -84,10 +84,10 @@ def generate_launch_description():
         ],
     )
 
-    panda_arm_controller_spawner = Node(
+    panda_arm_position_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["panda_arm_controller", "-c", "/controller_manager"],
+        arguments=["panda_arm_position_controller", "-c", "/controller_manager"],
     )
 
     # Launch as much as possible in components
@@ -99,16 +99,17 @@ def generate_launch_description():
         composable_node_descriptions=[
             # Example of launching Servo as a node component
             # Assuming ROS2 intraprocess communications works well, this is a more efficient way.
-            # ComposableNode(
-            #     package="moveit_servo",
-            #     plugin="moveit_servo::ServoServer",
-            #     name="servo_server",
-            #     parameters=[
-            #         servo_params,
-            #         moveit_config.robot_description,
-            #         moveit_config.robot_description_semantic,
-            #     ],
-            # ),
+            ComposableNode(
+                package="moveit_servo",
+                plugin="moveit_servo::ServoNode",
+                name="servo_node",
+                parameters=[
+                    servo_params,
+                    moveit_config.robot_description,
+                    moveit_config.robot_description_semantic,
+                    moveit_config.robot_description_kinematics,
+                ],
+            ),
             ComposableNode(
                 package="robot_state_publisher",
                 plugin="robot_state_publisher::RobotStatePublisher",
@@ -134,27 +135,13 @@ def generate_launch_description():
         ],
         output="screen",
     )
-    # Launch a standalone Servo node.
-    # As opposed to a node component, this may be necessary (for example) if Servo is running on a different PC
-    servo_node = Node(
-        package="moveit_servo",
-        executable="servo_node_main",
-        parameters=[
-            servo_params,
-            moveit_config.robot_description,
-            moveit_config.robot_description_semantic,
-            moveit_config.robot_description_kinematics,
-        ],
-        output="screen",
-    )
 
     return LaunchDescription(
         [
             rviz_node,
             ros2_control_node,
             joint_state_broadcaster_spawner,
-            panda_arm_controller_spawner,
-            servo_node,
+            panda_arm_position_controller_spawner,
             container,
         ]
     )

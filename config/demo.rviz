@@ -185,6 +185,8 @@ Visualization Manager:
       Name: Marker
       Namespaces:
         collision_object: true
+        demo_path: true
+        reproduced_path: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -239,25 +241,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.155569553375244
+      Distance: 1.669273018836975
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.08608254045248032
-        Y: -0.20677587389945984
-        Z: 0.3424459993839264
+        X: 0.19510333240032196
+        Y: -0.21392421424388885
+        Z: 0.1595611721277237
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.1903972625732422
+      Pitch: 0.745397686958313
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 5.828574180603027
+      Yaw: 0.8353975415229797
     Saved: ~
 Window Geometry:
   Displays:
