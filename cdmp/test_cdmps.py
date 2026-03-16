@@ -14,16 +14,16 @@ DEMO_CONFIGS = {
     'minjerk': {
         'filename': 'minJerk1.txt',
         'obstacle_pos': np.array([0.6, 0.2, 0.2]),
-        'beta_val': 2.0,
-        'lambda_f_val': 2.0,
-        'eta_val': 2.0,
+        'beta_val': 5.0,
+        'lambda_f_val': 5.0,
+        'eta_val': 5.0,
     },
     'vr': {
         'filename': 'vr_demo.txt',
         'obstacle_pos': np.array([0.35, 0.4, 1.2]),
-        'beta_val': 5.0,
-        'lambda_f_val': 5.0,
-        'eta_val': 5.0,
+        'beta_val': 2.0,
+        'lambda_f_val': 2.0,
+        'eta_val': 2.0,
     },
 }
 
