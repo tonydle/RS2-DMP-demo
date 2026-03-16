@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'test_cdmp_panda = rs2_dmp_demo.test_cdmp_panda:main',
+            'record_pose_trajectory = rs2_dmp_demo.record_pose_trajectory:main',
             'servo_test = rs2_dmp_demo.servo_test:main',
         ],
     },

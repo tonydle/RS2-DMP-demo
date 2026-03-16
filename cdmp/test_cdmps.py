@@ -10,6 +10,24 @@ from mpl_toolkits.mplot3d import Axes3D
 from src.cdmps import CartesianDMPs
 
 
+DEMO_CONFIGS = {
+    'minjerk': {
+        'filename': 'minJerk1.txt',
+        'obstacle_pos': np.array([0.6, 0.2, 0.2]),
+        'beta_val': 2.0,
+        'lambda_f_val': 2.0,
+        'eta_val': 2.0,
+    },
+    'vr': {
+        'filename': 'vr_demo.txt',
+        'obstacle_pos': np.array([0.35, 0.4, 1.2]),
+        'beta_val': 5.0,
+        'lambda_f_val': 5.0,
+        'eta_val': 5.0,
+    },
+}
+
+
 if __name__ == '__main__':
 
     # # --- PATAMETERS --- # # 
@@ -28,17 +46,26 @@ if __name__ == '__main__':
     
     # Obstacle Avoidance
     obstacle_avoidance = True
-    beta_val = 5.0
-    lambda_f_val = 5.0
-    eta_val = 5.0
-    obstacle_pos = np.array([0.6, 0.2, 0.2])
     plot_3dtraj = True
     plot_forces = False
 
 
     # # --- DEMO DATA --- # #
-    
-    filename = 'minJerk1.txt'
+
+    # demo_name = 'vr'
+    demo_name = 'minjerk'
+
+    if demo_name not in DEMO_CONFIGS:
+        sys.exit('ERROR: Unknown demo "{}". Available demos: {}'.format(
+            demo_name, ', '.join(DEMO_CONFIGS.keys())))
+
+    demo_config = DEMO_CONFIGS[demo_name]
+    filename = demo_config['filename']
+    obstacle_pos = demo_config['obstacle_pos']
+    beta_val = demo_config['beta_val']
+    lambda_f_val = demo_config['lambda_f_val']
+    eta_val = demo_config['eta_val']
+
     filepath = os.path.join(os.path.dirname(__file__), 'demos', filename)
     if not os.path.exists(filepath):
         sys.exit('ERROR: Unable to locate file: {}'.format(filepath))
