@@ -19,7 +19,7 @@ DEMO_CONFIGS = {
         'eta_val': 5.0,
     },
     'vr': {
-        'filename': 'vr_demo.txt',
+        'filename': 'vr_demo_uniform.txt',
         'obstacle_pos': np.array([0.35, 0.4, 1.2]),
         'beta_val': 2.0,
         'lambda_f_val': 2.0,
@@ -52,8 +52,8 @@ if __name__ == '__main__':
 
     # # --- DEMO DATA --- # #
 
-    # demo_name = 'vr'
-    demo_name = 'minjerk'
+    demo_name = 'vr'
+    # demo_name = 'minjerk'
 
     if demo_name not in DEMO_CONFIGS:
         sys.exit('ERROR: Unknown demo "{}". Available demos: {}'.format(
@@ -144,6 +144,7 @@ if __name__ == '__main__':
         if obstacle_pos is not None:
             ax.scatter(obstacle_pos[0], obstacle_pos[1], obstacle_pos[2], color='r', label='obstacle')
         ax.scatter(test_cdmp.rep_Pstart[0], test_cdmp.rep_Pstart[1], test_cdmp.rep_Pstart[2], color='g', label='rep start')
+        ax.scatter(test_cdmp.rep_Pgoal[0], test_cdmp.rep_Pgoal[1], test_cdmp.rep_Pgoal[2], color='m', label='rep goal')
         ax.scatter(test_cdmp.dem_Pstart[0], test_cdmp.dem_Pstart[1], test_cdmp.dem_Pstart[2], color='y', label='dem start')
         ax.set_xlabel('X')
         ax.set_ylabel('Y')

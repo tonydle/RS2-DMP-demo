@@ -570,7 +570,7 @@ class CanonicalSystem():
     def phase_rollout(self):
         
         self.reset_states()
-        s_track = self.s_step
+        s_track = np.array([self.s_step])
         loop_count = 0
 
         while (loop_count < self.size-1):
